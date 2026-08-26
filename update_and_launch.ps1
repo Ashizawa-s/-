@@ -11,7 +11,11 @@ function Download-Safely([string]$name) {
     try {
         Invoke-WebRequest -Uri "$repoBase/$name" -OutFile $tempPath -TimeoutSec 30
         if ((Get-Item -LiteralPath $tempPath).Length -lt 20) { throw "Downloaded file is empty" }
-        Move-Item -LiteralPath $tempPath -Destination (Join-Path $appDir $name) -Force
+        $destination = Join-Path $appDir $name
+        if ($name -eq "main.py" -and (Test-Path -LiteralPath $destination)) {
+            Copy-Item -LiteralPath $destination -Destination (Join-Path $updateDir "main.py.lastgood") -Force
+        }
+        Move-Item -LiteralPath $tempPath -Destination $destination -Force
     } catch {
         Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
         if (-not (Test-Path -LiteralPath (Join-Path $appDir $name))) { throw }
@@ -34,11 +38,26 @@ if (-not (Test-Path -LiteralPath $venvPython)) {
     }
     & $basePython -m venv (Join-Path $appDir ".venv")
     & $venvPython -m pip install --upgrade pip
+}
+
+$requirementsMarker = Join-Path $updateDir "requirements.sha256"
+$requirementsHash = (Get-FileHash -LiteralPath (Join-Path $appDir "requirements.txt") -Algorithm SHA256).Hash
+$installedHash = if (Test-Path -LiteralPath $requirementsMarker) { Get-Content -LiteralPath $requirementsMarker -Raw } else { "" }
+if ($requirementsHash -ne $installedHash.Trim()) {
     & $venvPython -m pip install -r (Join-Path $appDir "requirements.txt")
+    if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed" }
+    Set-Content -LiteralPath $requirementsMarker -Value $requirementsHash -Encoding ascii
 }
 
 & $venvPython -m py_compile (Join-Path $appDir "main.py")
-if ($LASTEXITCODE -ne 0) { throw "main.py validation failed" }
+if ($LASTEXITCODE -ne 0) {
+    $lastGood = Join-Path $updateDir "main.py.lastgood"
+    if (Test-Path -LiteralPath $lastGood) {
+        Copy-Item -LiteralPath $lastGood -Destination (Join-Path $appDir "main.py") -Force
+    } else {
+        throw "main.py validation failed"
+    }
+}
 
 Start-Process -FilePath $venvPythonw -ArgumentList 'main.py' -WorkingDirectory $appDir -WindowStyle Hidden
 
