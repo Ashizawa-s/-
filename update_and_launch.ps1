@@ -83,30 +83,38 @@ if ($LASTEXITCODE -ne 0) {
     }
 }
 
-$serverOutput = Join-Path $appDir "server_output.log"
-$serverError = Join-Path $appDir "server_error.log"
 $env:PYTHONUNBUFFERED = "1"
 $env:PYTHONIOENCODING = "utf-8"
 $script:lastServerDetails = ""
 
 function Start-TranscriptionServer([string]$modelName) {
-    Remove-Item -LiteralPath $serverOutput,$serverError -Force -ErrorAction SilentlyContinue
     $env:WHISPER_MODEL = $modelName
-    $server = Start-Process -FilePath $venvPython -ArgumentList 'main.py' -WorkingDirectory $appDir -WindowStyle Hidden -RedirectStandardOutput $serverOutput -RedirectStandardError $serverError -PassThru
+    $server = Start-Process -FilePath $venvPython -ArgumentList 'main.py' -WorkingDirectory $appDir -WindowStyle Hidden -PassThru
+    $exitChecks = 0
 
-    for ($i = 0; $i -lt 600; $i++) {
+    for ($i = 0; $i -lt 900; $i++) {
         Start-Sleep -Seconds 2
-        if ($server.HasExited) {
-            $details = if (Test-Path -LiteralPath $serverError) { Get-Content -LiteralPath $serverError -Raw } else { "" }
-            $script:lastServerDetails = "Model: $modelName / Exit code: $($server.ExitCode)`r`n$details"
-            return $false
-        }
         try {
             $response = Invoke-WebRequest -Uri "http://127.0.0.1:8000/" -TimeoutSec 2 -UseBasicParsing
             if ($response.StatusCode -eq 200) {
                 return $true
             }
         } catch { }
+
+        $server.Refresh()
+        if ($server.HasExited) {
+            $otherPython = Get-Process -Name python,pythonw -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $server.Id }
+            if ($otherPython) {
+                $exitChecks = 0
+            } else {
+                $exitChecks++
+                if ($exitChecks -ge 15) {
+                    $server.Refresh()
+                    $script:lastServerDetails = "Model: $modelName / Exit code: $($server.ExitCode)"
+                    return $false
+                }
+            }
+        }
     }
 
     if (-not $server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
