@@ -86,7 +86,9 @@ if ($LASTEXITCODE -ne 0) {
 $serverOutput = Join-Path $appDir "server_output.log"
 $serverError = Join-Path $appDir "server_error.log"
 Remove-Item -LiteralPath $serverOutput,$serverError -Force -ErrorAction SilentlyContinue
-$server = Start-Process -FilePath $venvPythonw -ArgumentList 'main.py' -WorkingDirectory $appDir -WindowStyle Hidden -RedirectStandardOutput $serverOutput -RedirectStandardError $serverError -PassThru
+$env:PYTHONUNBUFFERED = "1"
+$env:PYTHONIOENCODING = "utf-8"
+$server = Start-Process -FilePath $venvPython -ArgumentList 'main.py' -WorkingDirectory $appDir -WindowStyle Hidden -RedirectStandardOutput $serverOutput -RedirectStandardError $serverError -PassThru
 
 for ($i = 0; $i -lt 600; $i++) {
     Start-Sleep -Seconds 2
