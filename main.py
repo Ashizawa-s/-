@@ -6,7 +6,6 @@ from docx import Document
 
 app = FastAPI()
 
-# ローカルのWhisperモデルをロード（初回のみ自動ダウンロード）
 MODEL_SIZE = "small"
 print(f"Loading Whisper model ({MODEL_SIZE})...")
 model = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")
@@ -19,7 +18,7 @@ async def index():
     <html lang="ja">
     <head>
         <meta charset="UTF-8">
-        <title>ローカル精密文字起こしシステム</title>
+        <title>ローカル音声文字起こしシステム</title>
         <style>
             :root {
                 --bg-color: #f1f5f9;
