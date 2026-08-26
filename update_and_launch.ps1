@@ -61,7 +61,12 @@ if (-not (Test-Path -LiteralPath $venvPython)) {
 $requirementsMarker = Join-Path $updateDir "requirements.sha256"
 $requirementsHash = (Get-FileHash -LiteralPath (Join-Path $appDir "requirements.txt") -Algorithm SHA256).Hash
 $installedHash = if (Test-Path -LiteralPath $requirementsMarker) { Get-Content -LiteralPath $requirementsMarker -Raw } else { "" }
-if ($requirementsHash -ne $installedHash.Trim()) {
+$savedErrorAction = $ErrorActionPreference
+$ErrorActionPreference = "SilentlyContinue"
+& $venvPython -c "import faster_whisper, fastapi, pydub, docx" 2>$null
+$dependenciesReady = ($LASTEXITCODE -eq 0)
+$ErrorActionPreference = $savedErrorAction
+if (($requirementsHash -ne $installedHash.Trim()) -or (-not $dependenciesReady)) {
     $installOutput = (& $venvPython -m pip install -r (Join-Path $appDir "requirements.txt") 2>&1 | Out-String)
     if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed`r`n$installOutput" }
     Set-Content -LiteralPath $requirementsMarker -Value $requirementsHash -Encoding ascii
