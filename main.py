@@ -18,6 +18,22 @@ def format_time(seconds: float) -> str:
     s = math.floor(seconds % 60)
     return f"{m:02d}:{s:02d}"
 
+def determine_speaker(text: str, index: int) -> str:
+    """発言内容からAP（オペレーター）か客かを自動判定する簡易ロジック"""
+    ap_keywords = ["受付担当", "かしこまりました", "お伝え", "ご連絡", "失礼いたします", "よろしくお願い", "佐々木ですね"]
+    customer_keywords = ["お願いがある", "教えて", "変わっていただけない", "大丈夫です", "すみません", "お話しして"]
+    
+    for kw in ap_keywords:
+        if kw in text:
+            return "AP"
+    for kw in customer_keywords:
+        if kw in text:
+            return "客"
+            
+    if index == 0:
+        return "AP"
+    return "客"
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return """
@@ -308,9 +324,10 @@ async def transcribe_audio(file: UploadFile = File(...)):
         segments, info = model.transcribe(temp_file_path, beam_size=5, language="ja")
         
         full_text = f"対象ファイル: {file.filename}\n\n"
-        for segment in segments:
+        for i, segment in enumerate(segments):
             time_tag = format_time(segment.start)
-            full_text += f"[{time_tag}] {segment.text.strip()}\n"
+            speaker = determine_speaker(segment.text, i)
+            full_text += f"[{time_tag}] {speaker}: {segment.text.strip()}\n"
 
         return {"text": full_text}
 
