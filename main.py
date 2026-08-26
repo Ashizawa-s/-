@@ -1,4 +1,13 @@
 import os
+# モデルはユーザー専用領域へ保存し、権限問題と配布フォルダの肥大化を防ぐ。
+_local_app_data = os.getenv("LOCALAPPDATA", os.getcwd())
+_model_cache = os.path.join(_local_app_data, "AshizawaTranscriber", "model_cache")
+os.makedirs(_model_cache, exist_ok=True)
+os.environ["HF_HOME"] = _model_cache
+os.environ["HF_HUB_CACHE"] = os.path.join(_model_cache, "hub")
+os.environ["HF_HUB_DISABLE_XET"] = "1"
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+
 import math
 import re
 import tempfile
@@ -15,8 +24,16 @@ app = FastAPI()
 
 # 精度重視。重い場合は環境変数 WHISPER_MODEL=medium で軽量化できます。
 MODEL_SIZE = os.getenv("WHISPER_MODEL", "large-v3")
+MODEL_SOURCE = MODEL_SIZE
+# 旧版が取得済みのモデルを検出した場合は再ダウンロードせず再利用する。
+legacy_root = Path.home() / ".cache" / "huggingface" / "hub" / f"models--Systran--faster-whisper-{MODEL_SIZE}" / "snapshots"
+if legacy_root.exists():
+    for candidate in legacy_root.iterdir():
+        if (candidate / "model.bin").exists() and (candidate / "config.json").exists():
+            MODEL_SOURCE = str(candidate)
+            break
 print(f"Loading Whisper model ({MODEL_SIZE})...- 精度重視モード")
-model = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")
+model = WhisperModel(MODEL_SOURCE, device="cpu", compute_type="int8")
 print("Model loaded successfully!")
 
 DOMAIN_PROMPT = (
@@ -399,7 +416,12 @@ async def transcribe_audio(files: list[UploadFile] = File(...)):
                 else:
                     mono_path = os.path.join(temp_dir, "mono.wav")
                     normalize_audio(sources[0]).export(mono_path, format="wav")
-                    all_segments.extend(transcribe_channel(mono_path, "話者"))
+                    mono_segments = transcribe_channel(mono_path, "AP")
+                    # モノラル通話は音声だけで人物を完全分離できないため、
+                    # Whisperが検出した発言ターンを基準にAPから交互割当する。
+                    for index, segment in enumerate(mono_segments):
+                        segment["speaker"] = "AP" if index % 2 == 0 else "客"
+                    all_segments.extend(mono_segments)
 
         # タイムスタンプ順に時系列ソート
         all_segments.sort(key=lambda x: x["start"])
@@ -442,4 +464,5 @@ async def shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000)
+
 
