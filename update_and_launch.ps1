@@ -71,6 +71,7 @@ if (($requirementsHash -ne $installedHash.Trim()) -or (-not $dependenciesReady))
     if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed`r`n$installOutput" }
     Set-Content -LiteralPath $requirementsMarker -Value $requirementsHash -Encoding ascii
 }
+Set-Content -LiteralPath (Join-Path $runtimeDir "ready.txt") -Value "ready" -Encoding ascii
 
 & $venvPython -m py_compile (Join-Path $appDir "main.py")
 if ($LASTEXITCODE -ne 0) {
