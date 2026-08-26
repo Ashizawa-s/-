@@ -19,23 +19,22 @@ async def index():
     <html lang="ja">
     <head>
         <meta charset="UTF-8">
-        <title>キラキラ・ローカル文字起こし</title>
+        <title>ローカル精密文字起こしシステム</title>
         <style>
             :root {
-                --bg-gradient: linear-gradient(135deg, #fbcfe8 0%, #e0e7ff 50%, #ccfbf1 100%);
-                --card-bg: rgba(255, 255, 255, 0.85);
-                --primary-color: #ec4899;
-                --primary-hover: #db2777;
-                --text-color: #374151;
-                --border-color: #f472b6;
+                --bg-color: #f1f5f9;
+                --card-bg: #ffffff;
+                --primary-color: #2563eb;
+                --primary-hover: #1d4ed8;
+                --text-color: #1e293b;
+                --border-color: #cbd5e1;
             }
             body {
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                background: var(--bg-gradient);
-                background-attachment: fixed;
+                background-color: var(--bg-color);
                 color: var(--text-color);
                 margin: 0;
-                padding: 10px;
+                padding: 15px;
                 display: flex;
                 justify-content: center;
                 align-items: center;
@@ -44,84 +43,51 @@ async def index():
             }
             .container {
                 width: 100%;
-                max-width: 820px;
+                max-width: 800px;
                 background: var(--card-bg);
-                backdrop-filter: blur(10px);
                 padding: 25px;
-                border-radius: 20px;
-                box-shadow: 0 15px 35px rgba(236, 72, 153, 0.2);
-                border: 2px solid rgba(255, 255, 255, 0.6);
-                position: relative;
-                overflow: hidden;
-            }
-            /* キラキラ光る背景の演出 */
-            .container::before {
-                content: "✨ ⭐ 💖 ✨ ⭐";
-                position: absolute;
-                top: 10px;
-                right: 20px;
-                font-size: 1.2rem;
-                opacity: 0.6;
-                animation: sparkle 3s infinite alternate;
-            }
-            @keyframes sparkle {
-                0% { transform: scale(1); opacity: 0.4; }
-                100% { transform: scale(1.1); opacity: 0.9; }
+                border-radius: 12px;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+                border: 1px solid #e2e8f0;
             }
             .header-flex {
-                display: flex;
-                align-items: center;
-                gap: 15px;
-                border-bottom: 2px dashed #fbcfe8;
+                border-bottom: 2px solid #f1f5f9;
                 padding-bottom: 12px;
-                margin-bottom: 15px;
-            }
-            .mascot {
-                font-size: 2.5rem;
-                background: #fdf2f8;
-                padding: 10px;
-                border-radius: 50%;
-                box-shadow: 0 4px 10px rgba(236, 72, 153, 0.15);
-                animation: float 2s ease-in-out infinite alternate;
-            }
-            @keyframes float {
-                0% { transform: translateY(0px); }
-                100% { transform: translateY(-5px); }
+                margin-bottom: 20px;
             }
             h2 {
                 margin: 0;
                 font-size: 1.4rem;
-                color: #db2777;
+                color: #0f172a;
             }
             .subtitle {
                 font-size: 0.85rem;
-                color: #6b7280;
-                margin-top: 3px;
+                color: #64748b;
+                margin-top: 4px;
             }
             .drop-zone {
                 border: 2px dashed var(--border-color);
-                border-radius: 14px;
-                padding: 20px;
+                border-radius: 8px;
+                padding: 22px;
                 text-align: center;
-                background: rgba(255, 241, 242, 0.6);
+                background: #f8fafc;
                 cursor: pointer;
                 transition: all 0.2s;
                 margin-bottom: 15px;
             }
             .drop-zone.dragover {
-                background: rgba(252, 231, 243, 0.9);
-                border-color: #db2777;
-                transform: scale(1.01);
+                background: #eff6ff;
+                border-color: var(--primary-color);
             }
             .drop-zone p {
                 margin: 0 0 6px;
-                color: #4b5563;
+                color: #475569;
                 font-weight: 500;
                 font-size: 0.95rem;
             }
             .file-info {
                 font-weight: bold;
-                color: #db2777;
+                color: var(--primary-color);
                 margin-top: 4px;
                 font-size: 0.9rem;
             }
@@ -131,32 +97,31 @@ async def index():
                 margin-bottom: 15px;
             }
             button {
-                background: linear-gradient(135deg, #ec4899 0%, #f43f5e 100%);
+                background-color: var(--primary-color);
                 color: white;
                 border: none;
-                padding: 11px 16px;
+                padding: 10px 16px;
                 font-size: 0.95rem;
                 font-weight: 600;
-                border-radius: 10px;
+                border-radius: 6px;
                 cursor: pointer;
-                transition: all 0.2s;
+                transition: background-color 0.2s;
                 flex: 1;
-                box-shadow: 0 4px 15px rgba(236, 72, 153, 0.35);
             }
             button:hover {
-                opacity: 0.9;
-                transform: translateY(-2px);
-            }
-            button:active {
-                transform: translateY(0);
+                background-color: var(--primary-hover);
             }
             button.secondary {
-                background: linear-gradient(135deg, #8b5cf6 0%, #a855f7 100%);
-                box-shadow: 0 4px 15px rgba(139, 92, 246, 0.35);
+                background-color: #475569;
+            }
+            button.secondary:hover {
+                background-color: #334155;
             }
             button.success {
-                background: linear-gradient(135deg, #10b981 0%, #14b8a6 100%);
-                box-shadow: 0 4px 15px rgba(16, 185, 129, 0.35);
+                background-color: #0d9488;
+            }
+            button.success:hover {
+                background-color: #0f766e;
             }
             #status {
                 font-weight: 600;
@@ -164,21 +129,20 @@ async def index():
                 margin-bottom: 8px;
                 font-size: 0.9rem;
                 min-height: 20px;
-                text-align: center;
             }
             textarea {
                 width: 100%;
-                height: 360px;
+                height: 380px;
                 padding: 12px;
-                border: 2px solid #fbcfe8;
-                border-radius: 10px;
+                border: 1px solid var(--border-color);
+                border-radius: 6px;
                 font-family: inherit;
                 font-size: 0.95rem;
                 line-height: 1.5;
                 resize: vertical;
                 box-sizing: border-box;
-                background: rgba(255, 255, 255, 0.9);
-                color: #1f2937;
+                background: #fdfdfd;
+                color: #1e293b;
             }
             input[type="file"] {
                 display: none;
@@ -188,27 +152,24 @@ async def index():
     <body>
         <div class="container">
             <div class="header-flex">
-                <div class="mascot">🎤✨</div>
-                <div>
-                    <h2>キラキラ・ローカル文字起こし AI</h2>
-                    <div class="subtitle">お気に入りの音声をポイッと置いてね！完全ローカル・プライバシー安全安心仕様</div>
-                </div>
+                <h2>ローカル音声文字起こしシステム</h2>
+                <div class="subtitle">音声ファイルをドラッグ＆ドロップして文字起こしを実行します</div>
             </div>
             
             <div class="drop-zone" id="dropZone" onclick="document.getElementById('audioFile').click()">
-                <p>🎵 音声ファイルをここにドラッグ＆ドロップしてね！<br><span style="font-size: 0.8rem; color: #6b7280;">（クリックして選択もOK / MP3, WAV, M4A, AACなど対応）</span></p>
+                <p>音声ファイルをここにドラッグ＆ドロップしてください<br><span style="font-size: 0.8rem; color: #64748b;">（クリックしてファイル選択も可能 / MP3, WAV, M4A, AACなど対応）</span></p>
                 <div class="file-info" id="fileInfo">ファイルが選択されていません</div>
                 <input type="file" id="audioFile" accept="audio/*,.mp3,.wav,.m4a,.aac,.flac,.ogg">
             </div>
 
             <div class="btn-container">
-                <button onclick="transcribe()">💖 文字起こしスタート</button>
-                <button class="secondary" onclick="copyResult()">📋 結果をコピー</button>
-                <button class="success" onclick="downloadWord()">📝 Wordで保存</button>
+                <button onclick="transcribe()">文字起こし開始</button>
+                <button class="secondary" onclick="copyResult()">結果をコピー</button>
+                <button class="success" onclick="downloadWord()">Wordで保存</button>
             </div>
 
             <div id="status"></div>
-            <textarea id="result" placeholder="ここにキラキラな文字起こし結果が表示されるよ…✨"></textarea>
+            <textarea id="result" placeholder="ここに文字起こし結果が表示されます..."></textarea>
         </div>
 
         <script>
@@ -249,19 +210,19 @@ async def index():
 
             function handleFileSelection(file) {
                 selectedFile = file;
-                fileInfo.innerText = `✨ 選択中: ${file.name}`;
+                fileInfo.innerText = `選択中: ${file.name}`;
             }
 
             async function transcribe() {
                 if (!selectedFile) {
-                    alert('音声ファイルを選んでね！');
+                    alert('音声ファイルを選択してください');
                     return;
                 }
 
                 const formData = new FormData();
                 formData.append('file', selectedFile);
 
-                status.innerText = '🌟 音声を解析中だよ…！AIががんばって文字にしています！';
+                status.innerText = '文字起こし処理中... しばらくお待ちください';
                 result.value = '';
 
                 try {
@@ -272,35 +233,35 @@ async def index():
                     const data = await response.json();
                     if (response.ok) {
                         result.value = data.text;
-                        status.innerText = '🎉 文字起こしが完了したよ！やったね！';
+                        status.innerText = '文字起こしが完了しました';
                     } else {
-                        status.innerText = '💧 エラーが起きちゃいました…';
+                        status.innerText = 'エラーが発生しました';
                         result.value = data.detail;
                     }
                 } catch (err) {
-                    status.innerText = '💥 通信エラーが発生しました';
+                    status.innerText = '通信エラーが発生しました';
                     result.value = err;
                 }
             }
 
             function copyResult() {
                 if (!result.value) {
-                    alert('コピーするテキストがないよ！');
+                    alert('コピーするテキストがありません');
                     return;
                 }
                 navigator.clipboard.writeText(result.value).then(() => {
-                    alert('✨ クリップボードにコピーしたよ！');
+                    alert('クリップボードにコピーしました');
                 });
             }
 
             async function downloadWord() {
                 const text = result.value;
                 if (!text) {
-                    alert('保存するテキストがないよ！');
+                    alert('保存するテキストがありません');
                     return;
                 }
 
-                status.innerText = '📝 Wordファイルを作成中だよ…';
+                status.innerText = 'Wordファイルを作成中...';
 
                 try {
                     const response = await fetch('/download-word', {
@@ -318,12 +279,12 @@ async def index():
                         document.body.appendChild(a);
                         a.click();
                         a.remove();
-                        status.innerText = '🎉 Wordファイルのダウンロードが成功したよ！';
+                        status.innerText = 'Wordファイルのダウンロードが完了しました';
                     } else {
-                        status.innerText = '💧 Wordの作成に失敗しました';
+                        status.innerText = 'Wordの作成に失敗しました';
                     }
                 } catch (err) {
-                    status.innerText = '💥 エラーが発生しました';
+                    status.innerText = 'エラーが発生しました';
                 }
             }
         </script>
