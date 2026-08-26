@@ -1,6 +1,13 @@
 $ErrorActionPreference = "Stop"
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $appDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location -LiteralPath $appDir
+$errorLog = Join-Path $appDir "startup_error.txt"
+Remove-Item -LiteralPath $errorLog -Force -ErrorAction SilentlyContinue
+trap {
+    ($_ | Out-String) | Set-Content -LiteralPath $errorLog -Encoding UTF8
+    exit 1
+}
 
 $repoBase = "https://raw.githubusercontent.com/Ashizawa-s/-/main"
 $updateDir = Join-Path $appDir ".update"
@@ -31,12 +38,21 @@ if (-not (Test-Path -LiteralPath $venvPython)) {
     $basePython = $null
     if (Get-Command py -ErrorAction SilentlyContinue) { $basePython = "py" }
     elseif (Get-Command python -ErrorAction SilentlyContinue) { $basePython = "python" }
-    if (-not $basePython) {
-        Add-Type -AssemblyName PresentationFramework
-        [System.Windows.MessageBox]::Show("Python 3が見つかりません。最初にPythonをインストールしてください。", "文字起こしシステム") | Out-Null
-        exit 1
+    if ($basePython) {
+        & $basePython -m venv (Join-Path $appDir ".venv")
+    } else {
+        $runtimeDir = Join-Path $appDir ".runtime"
+        $uvPath = Join-Path $runtimeDir "uv.exe"
+        if (-not (Test-Path -LiteralPath $uvPath)) {
+            New-Item -ItemType Directory -Path $runtimeDir -Force | Out-Null
+            $uvZip = Join-Path $updateDir "uv.zip"
+            Invoke-WebRequest -Uri "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip" -OutFile $uvZip -TimeoutSec 120
+            Expand-Archive -LiteralPath $uvZip -DestinationPath $runtimeDir -Force
+            Remove-Item -LiteralPath $uvZip -Force -ErrorAction SilentlyContinue
+        }
+        & $uvPath venv --python 3.11 (Join-Path $appDir ".venv")
     }
-    & $basePython -m venv (Join-Path $appDir ".venv")
+    if (-not (Test-Path -LiteralPath $venvPython)) { throw "Python environment setup failed" }
     & $venvPython -m pip install --upgrade pip
 }
 
@@ -73,5 +89,5 @@ for ($i = 0; $i -lt 600; $i++) {
 }
 
 Add-Type -AssemblyName PresentationFramework
-[System.Windows.MessageBox]::Show("起動に時間がかかりすぎています。PCを再起動してからお試しください。", "文字起こしシステム") | Out-Null
+[System.Windows.MessageBox]::Show("Startup timed out. Please restart the PC and try again.", "Transcription System") | Out-Null
 
