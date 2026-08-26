@@ -1,4 +1,5 @@
 import os
+import math
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
 from faster_whisper import WhisperModel
@@ -10,6 +11,12 @@ MODEL_SIZE = "small"
 print(f"Loading Whisper model ({MODEL_SIZE})...")
 model = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")
 print("Model loaded successfully!")
+
+def format_time(seconds: float) -> str:
+    """秒数を [MM:SS] 形式の文字列に変換する関数"""
+    m = math.floor(seconds / 60)
+    s = math.floor(seconds % 60)
+    return f"{m:02d}:{s:02d}"
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
@@ -300,9 +307,10 @@ async def transcribe_audio(file: UploadFile = File(...)):
 
         segments, info = model.transcribe(temp_file_path, beam_size=5, language="ja")
         
-        full_text = ""
+        full_text = f"対象ファイル: {file.filename}\n\n"
         for segment in segments:
-            full_text += f"[{segment.start:.2f}s -> {segment.end:.2f}s] {segment.text}\n"
+            time_tag = format_time(segment.start)
+            full_text += f"[{time_tag}] {segment.text.strip()}\n"
 
         return {"text": full_text}
 
@@ -316,7 +324,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 async def download_word(data: dict):
     text = data.get("text", "")
     doc = Document()
-    doc.add_heading('文字起こし結果', 0)
+    doc.add_heading('通話文字起こしログ', 0)
     doc.add_paragraph(text)
     
     file_path = "temp_output.docx"
