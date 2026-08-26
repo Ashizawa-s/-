@@ -3,14 +3,13 @@ import math
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
 from faster_whisper import WhisperModel
-from pydub import AudioSegment
 from docx import Document
 
 app = FastAPI()
 
-# 精度重視のため "medium" モデルを使用（PCの性能に合わせて "small" に変更も可能）
+# 精度重視の "medium" モデル
 MODEL_SIZE = "medium"
-print(f"Loading Whisper model ({MODEL_SIZE})...- 精度重視モード")
+print(f"Loading Whisper model ({MODEL_SIZE})...")
 model = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")
 print("Model loaded successfully!")
 
@@ -160,7 +159,7 @@ async def index():
         <div class="container">
             <div class="header-flex">
                 <h2>ローカル高精度音声文字起こしシステム</h2>
-                <div class="subtitle">左右チャンネル分離 ＆ 専門用語補正モード</div>
+                <div class="subtitle">通話音声をAPと客に交互に振り分けて文字起こしします</div>
             </div>
             
             <div class="drop-zone" id="dropZone" onclick="document.getElementById('audioFile').click()">
@@ -229,7 +228,7 @@ async def index():
                 const formData = new FormData();
                 formData.append('file', selectedFile);
 
-                status.innerText = '高精度解析中（チャンネル分離・専門用語補正）...';
+                status.innerText = '高精度文字起こし処理中... しばらくお待ちください';
                 result.value = '';
 
                 try {
@@ -302,72 +301,48 @@ async def index():
 @app.post("/transcribe")
 async def transcribe_audio(file: UploadFile = File(...)):
     temp_file_path = f"temp_{file.filename}"
-    ap_path = "temp_ap.wav"
-    cust_path = "temp_cust.wav"
-    
     try:
-        contents = await file.read()
-        with open(temp_file_path, "wb") as f:
-            f.write(contents)
+        with open(temp_file_path, "wb") as buffer:
+            buffer.write(await file.read())
 
-        # pydubでステレオ分離（左：AP、右：顧客）
-        sound = AudioSegment.from_file(temp_file_path)
-        channels = sound.split_to_mono()
+        # 専門用語を補正するためのプロンプト
+        domain_prompt = "まとめて光, So-net光, ソネット光, 受付担当"
+        segments, info = model.transcribe(temp_file_path, beam_size=5, language="ja", initial_prompt=domain_prompt)
         
-        all_segments = []
-        # 専門用語の誤変換を防ぐための初期プロンプト
-        domain_prompt = "まとめて光, So-net光, ソネット光, オペレーター, 受付担当"
-
-        if len(channels) >= 2:
-            channels[0].export(ap_path, format="wav")
-            channels[1].export(cust_path, format="wav")
-
-            # AP側の文字起こし
-            ap_segments, _ = model.transcribe(ap_path, beam_size=5, language="ja", initial_prompt=domain_prompt)
-            for seg in ap_segments:
-                if seg.text.strip():
-                    all_segments.append({"start": seg.start, "speaker": "AP", "text": seg.text.strip()})
-
-            # 顧客側の文字起こし
-            cust_segments, _ = model.transcribe(cust_path, beam_size=5, language="ja", initial_prompt=domain_prompt)
-            for seg in cust_segments:
-                if seg.text.strip():
-                    all_segments.append({"start": seg.start, "speaker": "客", "text": seg.text.strip()})
-        else:
-            # モノラルの場合のフォールバック
-            segments, _ = model.transcribe(temp_file_path, beam_size=5, language="ja", initial_prompt=domain_prompt)
-            for seg in segments:
-                if seg.text.strip():
-                    all_segments.append({"start": seg.start, "speaker": "不明", "text": seg.text.strip()})
-
-        # タイムスタンプ順に時系列ソート
-        all_segments.sort(key=lambda x: x["start"])
-
         full_text = f"対象ファイル: {file.filename}\n\n"
-        for seg in all_segments:
-            time_tag = format_time(seg["start"])
-            full_text += f"[{time_tag}] {seg['speaker']}: {seg['text']}\n"
+        
+        # 最初の発言をAPとし、以降は交互に話者を切り替える
+        current_speaker = "AP"
+        for segment in segments:
+            text = segment.text.strip()
+            if not text:
+                continue
+            
+            time_tag = format_time(segment.start)
+            full_text += f"[{time_tag}] {current_speaker}: {text}\n"
+            
+            # 話者を交互に反転 (AP <-> 客)
+            current_speaker = "客" if current_speaker == "AP" else "AP"
 
         return {"text": full_text}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        for p in [temp_file_path, ap_path, cust_path]:
-            if os.path.exists(p):
-                os.remove(p)
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
 
 @app.post("/download-word")
 async def download_word(data: dict):
     text = data.get("text", "")
     doc = Document()
-    doc.add_heading('通話文字起こしログ（高精度版）', 0)
+    doc.add_heading('通話文字起こしログ', 0)
     doc.add_paragraph(text)
     
     file_path = "temp_output.docx"
     doc.save(file_path)
     
-    return FileResponse(file_path, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", filename="高精度文字起こし結果.docx")
+    return FileResponse(file_path, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", filename="文字起こし結果.docx")
 
 if __name__ == "__main__":
     import uvicorn
