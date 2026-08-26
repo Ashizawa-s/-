@@ -87,8 +87,17 @@ $env:PYTHONUNBUFFERED = "1"
 $env:PYTHONIOENCODING = "utf-8"
 $script:lastServerDetails = ""
 
-function Start-TranscriptionServer([string]$modelName) {
+function Start-TranscriptionServer([string]$modelName, [bool]$compatibilityMode) {
     $env:WHISPER_MODEL = $modelName
+    if ($compatibilityMode) {
+        $env:CT2_FORCE_CPU_ISA = "GENERIC"
+        $env:CT2_USE_MKL = "0"
+        $env:CT2_PACKED_GEMM = "0"
+    } else {
+        Remove-Item Env:CT2_FORCE_CPU_ISA -ErrorAction SilentlyContinue
+        Remove-Item Env:CT2_USE_MKL -ErrorAction SilentlyContinue
+        Remove-Item Env:CT2_PACKED_GEMM -ErrorAction SilentlyContinue
+    }
     $server = Start-Process -FilePath $venvPython -ArgumentList 'main.py' -WorkingDirectory $appDir -WindowStyle Hidden -PassThru
     $exitChecks = 0
 
@@ -110,7 +119,8 @@ function Start-TranscriptionServer([string]$modelName) {
                 $exitChecks++
                 if ($exitChecks -ge 15) {
                     $server.Refresh()
-                    $script:lastServerDetails = "Model: $modelName / Exit code: $($server.ExitCode)"
+                    $modeLabel = if ($compatibilityMode) { "compatibility" } else { "normal" }
+                    $script:lastServerDetails = "Model: $modelName / Mode: $modeLabel / Exit code: $($server.ExitCode)"
                     return $false
                 }
             }
@@ -122,8 +132,14 @@ function Start-TranscriptionServer([string]$modelName) {
     return $false
 }
 
-foreach ($modelName in @("large-v3", "medium", "small")) {
-    if (Start-TranscriptionServer $modelName) {
+$attempts = @(
+    @{ Model = "large-v3"; Compatibility = $false },
+    @{ Model = "large-v3"; Compatibility = $true },
+    @{ Model = "medium"; Compatibility = $true },
+    @{ Model = "small"; Compatibility = $true }
+)
+foreach ($attempt in $attempts) {
+    if (Start-TranscriptionServer $attempt.Model $attempt.Compatibility) {
         Start-Process "http://127.0.0.1:8000/"
         exit 0
     }
