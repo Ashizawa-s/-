@@ -83,10 +83,17 @@ if ($LASTEXITCODE -ne 0) {
     }
 }
 
-Start-Process -FilePath $venvPythonw -ArgumentList 'main.py' -WorkingDirectory $appDir -WindowStyle Hidden
+$serverOutput = Join-Path $appDir "server_output.log"
+$serverError = Join-Path $appDir "server_error.log"
+Remove-Item -LiteralPath $serverOutput,$serverError -Force -ErrorAction SilentlyContinue
+$server = Start-Process -FilePath $venvPythonw -ArgumentList 'main.py' -WorkingDirectory $appDir -WindowStyle Hidden -RedirectStandardOutput $serverOutput -RedirectStandardError $serverError -PassThru
 
 for ($i = 0; $i -lt 600; $i++) {
     Start-Sleep -Seconds 2
+    if ($server.HasExited) {
+        $details = if (Test-Path -LiteralPath $serverError) { Get-Content -LiteralPath $serverError -Raw } else { "No error details were produced." }
+        throw "Server startup failed`r`n$details"
+    }
     try {
         $response = Invoke-WebRequest -Uri "http://127.0.0.1:8000/" -TimeoutSec 2 -UseBasicParsing
         if ($response.StatusCode -eq 200) {
