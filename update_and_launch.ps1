@@ -32,25 +32,36 @@ function Download-Safely([string]$name) {
 Download-Safely "main.py"
 Download-Safely "requirements.txt"
 
-$venvPython = Join-Path $appDir ".venv\Scripts\python.exe"
-$venvPythonw = Join-Path $appDir ".venv\Scripts\pythonw.exe"
+$runtimeDir = Join-Path $env:LOCALAPPDATA "AshizawaTranscriber"
+$venvDir = Join-Path $runtimeDir "venv"
+$venvPython = Join-Path $venvDir "Scripts\python.exe"
+$venvPythonw = Join-Path $venvDir "Scripts\pythonw.exe"
 if (-not (Test-Path -LiteralPath $venvPython)) {
-    $basePython = $null
-    if (Get-Command py -ErrorAction SilentlyContinue) { $basePython = "py" }
-    elseif (Get-Command python -ErrorAction SilentlyContinue) { $basePython = "python" }
-    if ($basePython) {
-        & $basePython -m venv (Join-Path $appDir ".venv")
+    New-Item -ItemType Directory -Path $runtimeDir -Force | Out-Null
+    $python311 = $null
+    if (Get-Command py -ErrorAction SilentlyContinue) {
+        & py -3.11 -c "import sys" 2>$null
+        if ($LASTEXITCODE -eq 0) { $python311 = "py" }
+    }
+    if ($python311 -eq "py") {
+        & py -3.11 -m venv $venvDir
     } else {
-        $runtimeDir = Join-Path $appDir ".runtime"
         $uvPath = Join-Path $runtimeDir "uv.exe"
         if (-not (Test-Path -LiteralPath $uvPath)) {
-            New-Item -ItemType Directory -Path $runtimeDir -Force | Out-Null
             $uvZip = Join-Path $updateDir "uv.zip"
-            Invoke-WebRequest -Uri "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip" -OutFile $uvZip -TimeoutSec 120
+            $uvUrl = "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip"
+            if (Get-Command py -ErrorAction SilentlyContinue) {
+                & py -c "import sys,urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" $uvUrl $uvZip
+            } elseif (Get-Command python -ErrorAction SilentlyContinue) {
+                & python -c "import sys,urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" $uvUrl $uvZip
+            } else {
+                Invoke-WebRequest -Uri $uvUrl -OutFile $uvZip -TimeoutSec 120
+            }
+            if (-not (Test-Path -LiteralPath $uvZip)) { throw "Runtime download failed" }
             Expand-Archive -LiteralPath $uvZip -DestinationPath $runtimeDir -Force
             Remove-Item -LiteralPath $uvZip -Force -ErrorAction SilentlyContinue
         }
-        & $uvPath venv --python 3.11 (Join-Path $appDir ".venv")
+        & $uvPath venv --python 3.11 --seed $venvDir
     }
     if (-not (Test-Path -LiteralPath $venvPython)) { throw "Python environment setup failed" }
     & $venvPython -m pip install --upgrade pip
@@ -60,8 +71,8 @@ $requirementsMarker = Join-Path $updateDir "requirements.sha256"
 $requirementsHash = (Get-FileHash -LiteralPath (Join-Path $appDir "requirements.txt") -Algorithm SHA256).Hash
 $installedHash = if (Test-Path -LiteralPath $requirementsMarker) { Get-Content -LiteralPath $requirementsMarker -Raw } else { "" }
 if ($requirementsHash -ne $installedHash.Trim()) {
-    & $venvPython -m pip install -r (Join-Path $appDir "requirements.txt")
-    if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed" }
+    $installOutput = (& $venvPython -m pip install -r (Join-Path $appDir "requirements.txt") 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed`r`n$installOutput" }
     Set-Content -LiteralPath $requirementsMarker -Value $requirementsHash -Encoding ascii
 }
 
