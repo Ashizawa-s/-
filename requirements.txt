@@ -1,0 +1,9 @@
+faster-whisper
+fastapi
+uvicorn
+python-multipart
+faster-whisper
+fastapi
+uvicorn
+python-multipart
+python-docx
