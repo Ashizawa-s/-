@@ -1,7 +1,5 @@
 import os
 import math
-import soundfile as sf
-import numpy as np
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
 from faster_whisper import WhisperModel
@@ -160,7 +158,7 @@ async def index():
         <div class="container">
             <div class="header-flex">
                 <h2>ローカル音声文字起こしシステム</h2>
-                <div class="subtitle">音声ファイルを左右チャンネルに分離して正確に文字起こしします</div>
+                <div class="subtitle">通話音声をAPと客に交互に振り分けて文字起こしします</div>
             </div>
             
             <div class="drop-zone" id="dropZone" onclick="document.getElementById('audioFile').click()">
@@ -229,7 +227,7 @@ async def index():
                 const formData = new FormData();
                 formData.append('file', selectedFile);
 
-                status.innerText = '左右チャンネルを分離して文字起こし中... しばらくお待ちください';
+                status.innerText = '文字起こし処理中... しばらくお待ちください';
                 result.value = '';
 
                 try {
@@ -302,56 +300,34 @@ async def index():
 @app.post("/transcribe")
 async def transcribe_audio(file: UploadFile = File(...)):
     temp_file_path = f"temp_{file.filename}"
-    ap_file_path = "temp_ap.wav"
-    customer_file_path = "temp_customer.wav"
-    
     try:
-        content = await file.read()
         with open(temp_file_path, "wb") as buffer:
-            buffer.write(content)
+            buffer.write(await file.read())
 
-        # 音声データを読み込み、ステレオ分離を試みる
-        data, samplerate = sf.read(temp_file_path)
+        segments, info = model.transcribe(temp_file_path, beam_size=5, language="ja")
         
-        all_segments = []
-
-        if data.ndim == 2 and data.shape[1] >= 2:
-            # ステレオの場合：Lチャンネル(AP)とRチャンネル(客)に分ける
-            sf.write(ap_file_path, data[:, 0], samplerate)
-            sf.write(customer_file_path, data[:, 1], samplerate)
-
-            ap_segments, _ = model.transcribe(ap_file_path, beam_size=5, language="ja")
-            for seg in ap_segments:
-                if len(seg.text.strip()) > 0:
-                    all_segments.append({"start": seg.start, "speaker": "AP", "text": seg.text.strip()})
-
-            customer_segments, _ = model.transcribe(customer_file_path, beam_size=5, language="ja")
-            for seg in customer_segments:
-                if len(seg.text.strip()) > 0:
-                    all_segments.append({"start": seg.start, "speaker": "客", "text": seg.text.strip()})
-        else:
-            # モノラルの場合（フォールバック）
-            segments, _ = model.transcribe(temp_file_path, beam_size=5, language="ja")
-            for seg in segments:
-                if len(seg.text.strip()) > 0:
-                    all_segments.append({"start": seg.start, "speaker": "不明", "text": seg.text.strip()})
-
-        # 時間順にソート
-        all_segments.sort(key=lambda x: x["start"])
-
         full_text = f"対象ファイル: {file.filename}\n\n"
-        for seg in all_segments:
-            time_tag = format_time(seg["start"])
-            full_text += f"[{time_tag}] {seg['speaker']}: {seg['text']}\n"
+        
+        # 最初の発言をAPとし、以降はセグメントごとに交互に話者を切り替える
+        current_speaker = "AP"
+        for segment in segments:
+            text = segment.text.strip()
+            if not text:
+                continue
+            
+            time_tag = format_time(segment.start)
+            full_text += f"[{time_tag}] {current_speaker}: {text}\n"
+            
+            # 話者を交互に反転 (AP <-> 客)
+            current_speaker = "客" if current_speaker == "AP" else "AP"
 
         return {"text": full_text}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        for p in [temp_file_path, ap_file_path, customer_file_path]:
-            if os.path.exists(p):
-                os.remove(p)
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
 
 @app.post("/download-word")
 async def download_word(data: dict):
