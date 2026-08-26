@@ -85,26 +85,41 @@ if ($LASTEXITCODE -ne 0) {
 
 $serverOutput = Join-Path $appDir "server_output.log"
 $serverError = Join-Path $appDir "server_error.log"
-Remove-Item -LiteralPath $serverOutput,$serverError -Force -ErrorAction SilentlyContinue
 $env:PYTHONUNBUFFERED = "1"
 $env:PYTHONIOENCODING = "utf-8"
-$server = Start-Process -FilePath $venvPython -ArgumentList 'main.py' -WorkingDirectory $appDir -WindowStyle Hidden -RedirectStandardOutput $serverOutput -RedirectStandardError $serverError -PassThru
+$script:lastServerDetails = ""
 
-for ($i = 0; $i -lt 600; $i++) {
-    Start-Sleep -Seconds 2
-    if ($server.HasExited) {
-        $details = if (Test-Path -LiteralPath $serverError) { Get-Content -LiteralPath $serverError -Raw } else { "No error details were produced." }
-        throw "Server startup failed`r`n$details"
-    }
-    try {
-        $response = Invoke-WebRequest -Uri "http://127.0.0.1:8000/" -TimeoutSec 2 -UseBasicParsing
-        if ($response.StatusCode -eq 200) {
-            Start-Process "http://127.0.0.1:8000/"
-            exit 0
+function Start-TranscriptionServer([string]$modelName) {
+    Remove-Item -LiteralPath $serverOutput,$serverError -Force -ErrorAction SilentlyContinue
+    $env:WHISPER_MODEL = $modelName
+    $server = Start-Process -FilePath $venvPython -ArgumentList 'main.py' -WorkingDirectory $appDir -WindowStyle Hidden -RedirectStandardOutput $serverOutput -RedirectStandardError $serverError -PassThru
+
+    for ($i = 0; $i -lt 600; $i++) {
+        Start-Sleep -Seconds 2
+        if ($server.HasExited) {
+            $details = if (Test-Path -LiteralPath $serverError) { Get-Content -LiteralPath $serverError -Raw } else { "" }
+            $script:lastServerDetails = "Model: $modelName / Exit code: $($server.ExitCode)`r`n$details"
+            return $false
         }
-    } catch { }
+        try {
+            $response = Invoke-WebRequest -Uri "http://127.0.0.1:8000/" -TimeoutSec 2 -UseBasicParsing
+            if ($response.StatusCode -eq 200) {
+                return $true
+            }
+        } catch { }
+    }
+
+    if (-not $server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
+    $script:lastServerDetails = "Model: $modelName / Startup timed out."
+    return $false
 }
 
-Add-Type -AssemblyName PresentationFramework
-[System.Windows.MessageBox]::Show("Startup timed out. Please restart the PC and try again.", "Transcription System") | Out-Null
+foreach ($modelName in @("large-v3", "medium", "small")) {
+    if (Start-TranscriptionServer $modelName) {
+        Start-Process "http://127.0.0.1:8000/"
+        exit 0
+    }
+}
+
+throw "All model modes failed.`r`n$script:lastServerDetails"
 
