@@ -1,22 +1,79 @@
 import os
 import math
+import re
+import tempfile
+import threading
+from pathlib import Path
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
+from starlette.background import BackgroundTask
 from faster_whisper import WhisperModel
+from pydub import AudioSegment
 from docx import Document
 
 app = FastAPI()
 
-# 精度重視の "medium" モデル
-MODEL_SIZE = "medium"
-print(f"Loading Whisper model ({MODEL_SIZE})...")
+# 精度重視。重い場合は環境変数 WHISPER_MODEL=medium で軽量化できます。
+MODEL_SIZE = os.getenv("WHISPER_MODEL", "large-v3")
+print(f"Loading Whisper model ({MODEL_SIZE})...- 精度重視モード")
 model = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")
 print("Model loaded successfully!")
+
+DOMAIN_PROMPT = (
+    "これは日本語の電話応対の会話です。発言を省略せず、自然な句読点を付けてください。"
+    "固有名詞と専門用語: まとめて光、So-net 光、ソネット光、オペレーター、"
+    "受付担当、お客さま、契約者、回線、転用、事業者変更、工事費、違約金。"
+)
+
+REPLACEMENTS = {
+    "ソネット 光": "So-net 光",
+    "ソネット光": "So-net 光",
+    "まとめてひかり": "まとめて光",
+}
 
 def format_time(seconds: float) -> str:
     m = math.floor(seconds / 60)
     s = math.floor(seconds % 60)
     return f"{m:02d}:{s:02d}"
+
+def normalize_audio(audio: AudioSegment) -> AudioSegment:
+    """Whisper向けに16kHz/monoへ統一し、小さすぎる音声だけ増幅する。"""
+    audio = audio.set_frame_rate(16000).set_sample_width(2).set_channels(1)
+    if audio.dBFS != float("-inf") and audio.dBFS < -24:
+        audio = audio.apply_gain(min(12.0, -20.0 - audio.dBFS))
+    return audio
+
+def clean_text(text: str) -> str:
+    text = re.sub(r"\s+", " ", text).strip()
+    for wrong, correct in REPLACEMENTS.items():
+        text = text.replace(wrong, correct)
+    return text
+
+def transcribe_channel(path: str, speaker: str):
+    segments, _ = model.transcribe(
+        path,
+        language="ja",
+        beam_size=8,
+        best_of=8,
+        patience=1.2,
+        temperature=0.0,
+        initial_prompt=DOMAIN_PROMPT,
+        condition_on_previous_text=True,
+        vad_filter=True,
+        vad_parameters={"min_silence_duration_ms": 500, "speech_pad_ms": 250},
+        no_speech_threshold=0.6,
+        log_prob_threshold=-1.0,
+        compression_ratio_threshold=2.4,
+    )
+    result = []
+    last_text = ""
+    for seg in segments:
+        text = clean_text(seg.text)
+        # 無音区間で起きやすい同一文の連続出力を除く。
+        if text and text != last_text:
+            result.append({"start": seg.start, "speaker": speaker, "text": text})
+            last_text = text
+    return result
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
@@ -159,13 +216,13 @@ async def index():
         <div class="container">
             <div class="header-flex">
                 <h2>ローカル高精度音声文字起こしシステム</h2>
-                <div class="subtitle">通話音声をAPと客に交互に振り分けて文字起こしします</div>
+                <div class="subtitle">左右チャンネル分離 ＆ 専門用語補正モード</div>
             </div>
             
             <div class="drop-zone" id="dropZone" onclick="document.getElementById('audioFile').click()">
-                <p>音声ファイルをここにドラッグ＆ドロップしてください<br><span style="font-size: 0.8rem; color: #64748b;">（クリックしてファイル選択も可能 / MP3, WAVなど）</span></p>
+                <p>音声ファイルをここにドラッグ＆ドロップしてください<br><span style="font-size: 0.8rem; color: #64748b;">AP音声→客音声の順に2ファイル選択（1ファイルでも可）</span></p>
                 <div class="file-info" id="fileInfo">ファイルが選択されていません</div>
-                <input type="file" id="audioFile" accept="audio/*,.mp3,.wav,.m4a,.aac,.flac,.ogg">
+                <input type="file" id="audioFile" accept="audio/*,.mp3,.wav,.m4a,.aac,.flac,.ogg" multiple>
             </div>
 
             <div class="btn-container">
@@ -184,7 +241,7 @@ async def index():
             const fileInfo = document.getElementById('fileInfo');
             const status = document.getElementById('status');
             const result = document.getElementById('result');
-            let selectedFile = null;
+            let selectedFiles = [];
 
             ['dragenter', 'dragover'].forEach(eventName => {
                 dropZone.addEventListener(eventName, (e) => {
@@ -204,31 +261,35 @@ async def index():
                 const files = e.dataTransfer.files;
                 if (files.length > 0) {
                     fileInput.files = files;
-                    handleFileSelection(files[0]);
+                    handleFileSelection(files);
                 }
             }, false);
 
             fileInput.addEventListener('change', () => {
                 if (fileInput.files.length > 0) {
-                    handleFileSelection(fileInput.files[0]);
+                    handleFileSelection(fileInput.files);
                 }
             });
 
-            function handleFileSelection(file) {
-                selectedFile = file;
-                fileInfo.innerText = `選択中: ${file.name}`;
+            function handleFileSelection(files) {
+                selectedFiles = Array.from(files).slice(0, 2);
+                if (selectedFiles.length === 2) {
+                    fileInfo.innerText = `AP: ${selectedFiles[0].name} / 客: ${selectedFiles[1].name}`;
+                } else {
+                    fileInfo.innerText = `選択中: ${selectedFiles[0].name}（左右チャンネルを自動判定）`;
+                }
             }
 
             async function transcribe() {
-                if (!selectedFile) {
+                if (selectedFiles.length === 0) {
                     alert('音声ファイルを選択してください');
                     return;
                 }
 
                 const formData = new FormData();
-                formData.append('file', selectedFile);
+                selectedFiles.forEach(file => formData.append('files', file));
 
-                status.innerText = '高精度文字起こし処理中... しばらくお待ちください';
+                status.innerText = '高精度解析中（チャンネル分離・専門用語補正）...';
                 result.value = '';
 
                 try {
@@ -293,57 +354,92 @@ async def index():
                     status.innerText = 'エラーが発生しました';
                 }
             }
+            window.addEventListener('beforeunload', () => {
+                navigator.sendBeacon('/shutdown');
+            });
         </script>
     </body>
     </html>
     """
 
 @app.post("/transcribe")
-async def transcribe_audio(file: UploadFile = File(...)):
-    temp_file_path = f"temp_{file.filename}"
+async def transcribe_audio(files: list[UploadFile] = File(...)):
     try:
-        with open(temp_file_path, "wb") as buffer:
-            buffer.write(await file.read())
+        if not 1 <= len(files) <= 2:
+            raise HTTPException(status_code=400, detail="音声は1つまたは2つ選択してください。")
+        with tempfile.TemporaryDirectory(prefix="transcribe_") as temp_dir:
+            all_segments = []
+            sources = []
+            for index, upload in enumerate(files):
+                suffix = Path(upload.filename or "audio").suffix
+                source_path = os.path.join(temp_dir, f"source_{index}{suffix}")
+                with open(source_path, "wb") as f:
+                    while chunk := await upload.read(1024 * 1024):
+                        f.write(chunk)
+                sources.append(AudioSegment.from_file(source_path))
 
-        # 専門用語を補正するためのプロンプト
-        domain_prompt = "まとめて光, So-net光, ソネット光, 受付担当"
-        segments, info = model.transcribe(temp_file_path, beam_size=5, language="ja", initial_prompt=domain_prompt)
-        
-        full_text = f"対象ファイル: {file.filename}\n\n"
-        
-        # 最初の発言をAPとし、以降は交互に話者を切り替える
-        current_speaker = "AP"
-        for segment in segments:
-            text = segment.text.strip()
-            if not text:
-                continue
-            
-            time_tag = format_time(segment.start)
-            full_text += f"[{time_tag}] {current_speaker}: {text}\n"
-            
-            # 話者を交互に反転 (AP <-> 客)
-            current_speaker = "客" if current_speaker == "AP" else "AP"
+            if len(sources) == 2:
+                for audio, filename, speaker in (
+                    (sources[0], "ap.wav", "AP"),
+                    (sources[1], "customer.wav", "客"),
+                ):
+                    path = os.path.join(temp_dir, filename)
+                    normalize_audio(audio).export(path, format="wav")
+                    all_segments.extend(transcribe_channel(path, speaker))
+            else:
+                channels = sources[0].split_to_mono()
+                if len(channels) >= 2:
+                    for audio, filename, speaker in (
+                        (channels[0], "ap.wav", "AP"),
+                        (channels[1], "customer.wav", "客"),
+                    ):
+                        path = os.path.join(temp_dir, filename)
+                        normalize_audio(audio).export(path, format="wav")
+                        all_segments.extend(transcribe_channel(path, speaker))
+                else:
+                    mono_path = os.path.join(temp_dir, "mono.wav")
+                    normalize_audio(sources[0]).export(mono_path, format="wav")
+                    all_segments.extend(transcribe_channel(mono_path, "話者"))
+
+        # タイムスタンプ順に時系列ソート
+        all_segments.sort(key=lambda x: x["start"])
+
+        safe_names = " / ".join(Path(f.filename or "音声ファイル").name for f in files)
+        full_text = f"通話文字起こし\n対象ファイル: {safe_names}\n\n【文字起こしログ】\n\n"
+        for seg in all_segments:
+            time_tag = format_time(seg["start"])
+            full_text += f"[{seg['speaker']} {time_tag}] {seg['text']}\n"
 
         return {"text": full_text}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if os.path.exists(temp_file_path):
-            os.remove(temp_file_path)
 
 @app.post("/download-word")
 async def download_word(data: dict):
     text = data.get("text", "")
     doc = Document()
-    doc.add_heading('通話文字起こしログ', 0)
-    doc.add_paragraph(text)
-    
-    file_path = "temp_output.docx"
+    doc.add_heading('通話文字起こし', 0)
+    for line in text.splitlines():
+        doc.add_paragraph(line)
+
+    fd, file_path = tempfile.mkstemp(prefix="transcript_", suffix=".docx")
+    os.close(fd)
     doc.save(file_path)
-    
-    return FileResponse(file_path, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", filename="文字起こし結果.docx")
+
+    return FileResponse(
+        file_path,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename="高精度文字起こし結果.docx",
+        background=BackgroundTask(lambda: os.path.exists(file_path) and os.remove(file_path)),
+    )
+
+@app.post("/shutdown")
+async def shutdown():
+    threading.Timer(1.0, lambda: os._exit(0)).start()
+    return {"status": "closing"}
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000)
+
