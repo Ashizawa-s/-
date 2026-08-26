@@ -38,31 +38,22 @@ $venvPython = Join-Path $venvDir "Scripts\python.exe"
 $venvPythonw = Join-Path $venvDir "Scripts\pythonw.exe"
 if (-not (Test-Path -LiteralPath $venvPython)) {
     New-Item -ItemType Directory -Path $runtimeDir -Force | Out-Null
-    $python311 = $null
-    if (Get-Command py -ErrorAction SilentlyContinue) {
-        & py -3.11 -c "import sys" 2>$null
-        if ($LASTEXITCODE -eq 0) { $python311 = "py" }
-    }
-    if ($python311 -eq "py") {
-        & py -3.11 -m venv $venvDir
-    } else {
-        $uvPath = Join-Path $runtimeDir "uv.exe"
-        if (-not (Test-Path -LiteralPath $uvPath)) {
-            $uvZip = Join-Path $updateDir "uv.zip"
-            $uvUrl = "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip"
-            if (Get-Command py -ErrorAction SilentlyContinue) {
-                & py -c "import sys,urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" $uvUrl $uvZip
-            } elseif (Get-Command python -ErrorAction SilentlyContinue) {
-                & python -c "import sys,urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" $uvUrl $uvZip
-            } else {
-                Invoke-WebRequest -Uri $uvUrl -OutFile $uvZip -TimeoutSec 120
-            }
-            if (-not (Test-Path -LiteralPath $uvZip)) { throw "Runtime download failed" }
-            Expand-Archive -LiteralPath $uvZip -DestinationPath $runtimeDir -Force
-            Remove-Item -LiteralPath $uvZip -Force -ErrorAction SilentlyContinue
+    $uvPath = Join-Path $runtimeDir "uv.exe"
+    if (-not (Test-Path -LiteralPath $uvPath)) {
+        $uvZip = Join-Path $updateDir "uv.zip"
+        $uvUrl = "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip"
+        if (Get-Command py -ErrorAction SilentlyContinue) {
+            & py -c "import sys,urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" $uvUrl $uvZip
+        } elseif (Get-Command python -ErrorAction SilentlyContinue) {
+            & python -c "import sys,urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" $uvUrl $uvZip
+        } else {
+            Invoke-WebRequest -Uri $uvUrl -OutFile $uvZip -TimeoutSec 120
         }
-        & $uvPath venv --python 3.11 --seed $venvDir
+        if (-not (Test-Path -LiteralPath $uvZip)) { throw "Runtime download failed" }
+        Expand-Archive -LiteralPath $uvZip -DestinationPath $runtimeDir -Force
+        Remove-Item -LiteralPath $uvZip -Force -ErrorAction SilentlyContinue
     }
+    & $uvPath venv --python 3.11 --seed $venvDir
     if (-not (Test-Path -LiteralPath $venvPython)) { throw "Python environment setup failed" }
     & $venvPython -m pip install --upgrade pip
 }
