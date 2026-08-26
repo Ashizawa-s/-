@@ -36,6 +36,14 @@ print(f"Loading Whisper model ({MODEL_SIZE})...- 精度重視モード")
 model = WhisperModel(MODEL_SOURCE, device="cpu", compute_type="int8")
 print("Model loaded successfully!")
 
+progress_state = {"percent": 0, "stage": "待機中"}
+progress_lock = threading.Lock()
+
+def set_progress(percent: int, stage: str):
+    with progress_lock:
+        progress_state["percent"] = max(0, min(100, int(percent)))
+        progress_state["stage"] = stage
+
 DOMAIN_PROMPT = (
     "これは日本語の電話応対の会話です。発言を省略せず、自然な句読点を付けてください。"
     "固有名詞と専門用語: まとめて光、So-net 光、ソネット光、オペレーター、"
@@ -66,8 +74,9 @@ def clean_text(text: str) -> str:
         text = text.replace(wrong, correct)
     return text
 
-def transcribe_channel(path: str, speaker: str):
-    segments, _ = model.transcribe(
+def transcribe_channel(path: str, speaker: str, progress_start=10, progress_end=90, stage="音声解析中"):
+    set_progress(progress_start, stage)
+    segments, info = model.transcribe(
         path,
         language="ja",
         beam_size=8,
@@ -84,7 +93,10 @@ def transcribe_channel(path: str, speaker: str):
     )
     result = []
     last_text = ""
+    duration = max(float(info.duration or 0), 1.0)
     for seg in segments:
+        ratio = min(max(float(seg.end) / duration, 0.0), 1.0)
+        set_progress(progress_start + (progress_end - progress_start) * ratio, stage)
         text = clean_text(seg.text)
         # 無音区間で起きやすい同一文の連続出力を除く。
         if text and text != last_text:
@@ -210,6 +222,10 @@ async def index():
                 font-size: 0.9rem;
                 min-height: 20px;
             }
+            .progress-wrap { display: none; margin: 0 0 12px; padding: 10px 12px; background: #e2e8f0; border-radius: 8px; }
+            .progress-track { height: 12px; background: #cbd5e1; border-radius: 999px; overflow: hidden; margin-top: 7px; }
+            .progress-bar { width: 0%; height: 100%; background: var(--primary-color); transition: width 0.35s ease; }
+            #progressText { font-size: 0.9rem; font-weight: 600; color: #334155; }
             textarea {
                 width: 100%;
                 height: 380px;
@@ -249,6 +265,10 @@ async def index():
             </div>
 
             <div id="status"></div>
+            <div class="progress-wrap" id="progressWrap">
+                <div id="progressText">0%　準備中</div>
+                <div class="progress-track"><div class="progress-bar" id="progressBar"></div></div>
+            </div>
             <textarea id="result" placeholder="ここに文字起こし結果が表示されます..."></textarea>
         </div>
 
@@ -258,7 +278,31 @@ async def index():
             const fileInfo = document.getElementById('fileInfo');
             const status = document.getElementById('status');
             const result = document.getElementById('result');
+            const progressWrap = document.getElementById('progressWrap');
+            const progressText = document.getElementById('progressText');
+            const progressBar = document.getElementById('progressBar');
+            let progressTimer = null;
             let selectedFiles = [];
+
+            function showProgress(percent, stage) {
+                progressWrap.style.display = 'block';
+                progressBar.style.width = percent + '%';
+                progressText.innerText = percent + '%　' + stage;
+            }
+            function startProgressPolling() {
+                showProgress(0, '処理を開始しています');
+                progressTimer = setInterval(async () => {
+                    try {
+                        const response = await fetch('/progress', { cache: 'no-store' });
+                        const data = await response.json();
+                        showProgress(data.percent, data.stage);
+                    } catch (_) {}
+                }, 700);
+            }
+            function stopProgressPolling() {
+                if (progressTimer) clearInterval(progressTimer);
+                progressTimer = null;
+            }
 
             ['dragenter', 'dragover'].forEach(eventName => {
                 dropZone.addEventListener(eventName, (e) => {
@@ -306,8 +350,9 @@ async def index():
                 const formData = new FormData();
                 selectedFiles.forEach(file => formData.append('files', file));
 
-                status.innerText = '高精度解析中（チャンネル分離・専門用語補正）...';
+                status.innerText = '高精度解析中です...';
                 result.value = '';
+                startProgressPolling();
 
                 try {
                     const response = await fetch('/transcribe', {
@@ -317,6 +362,7 @@ async def index():
                     const data = await response.json();
                     if (response.ok) {
                         result.value = data.text;
+                        showProgress(100, '文字起こし完了');
                         status.innerText = '文字起こしが完了しました';
                     } else {
                         status.innerText = 'エラーが発生しました';
@@ -325,6 +371,8 @@ async def index():
                 } catch (err) {
                     status.innerText = '通信エラーが発生しました';
                     result.value = err;
+                } finally {
+                    stopProgressPolling();
                 }
             }
 
@@ -379,8 +427,14 @@ async def index():
     </html>
     """
 
+@app.get("/progress")
+def get_progress():
+    with progress_lock:
+        return dict(progress_state)
+
 @app.post("/transcribe")
-async def transcribe_audio(files: list[UploadFile] = File(...)):
+def transcribe_audio(files: list[UploadFile] = File(...)):
+    set_progress(1, "音声ファイルを読み込み中")
     try:
         if not 1 <= len(files) <= 2:
             raise HTTPException(status_code=400, detail="音声は1つまたは2つ選択してください。")
@@ -391,10 +445,11 @@ async def transcribe_audio(files: list[UploadFile] = File(...)):
                 suffix = Path(upload.filename or "audio").suffix
                 source_path = os.path.join(temp_dir, f"source_{index}{suffix}")
                 with open(source_path, "wb") as f:
-                    while chunk := await upload.read(1024 * 1024):
+                    while chunk := upload.file.read(1024 * 1024):
                         f.write(chunk)
                 sources.append(AudioSegment.from_file(source_path))
 
+            set_progress(7, "音声を文字起こし用に整えています")
             if len(sources) == 2:
                 for audio, filename, speaker in (
                     (sources[0], "ap.wav", "AP"),
@@ -402,7 +457,10 @@ async def transcribe_audio(files: list[UploadFile] = File(...)):
                 ):
                     path = os.path.join(temp_dir, filename)
                     normalize_audio(audio).export(path, format="wav")
-                    all_segments.extend(transcribe_channel(path, speaker))
+                    if speaker == "AP":
+                        all_segments.extend(transcribe_channel(path, speaker, 10, 50, "AP音声を解析中"))
+                    else:
+                        all_segments.extend(transcribe_channel(path, speaker, 50, 90, "客音声を解析中"))
             else:
                 channels = sources[0].split_to_mono()
                 if len(channels) >= 2:
@@ -412,17 +470,21 @@ async def transcribe_audio(files: list[UploadFile] = File(...)):
                     ):
                         path = os.path.join(temp_dir, filename)
                         normalize_audio(audio).export(path, format="wav")
-                        all_segments.extend(transcribe_channel(path, speaker))
+                        if speaker == "AP":
+                            all_segments.extend(transcribe_channel(path, speaker, 10, 50, "左チャンネル（AP）を解析中"))
+                        else:
+                            all_segments.extend(transcribe_channel(path, speaker, 50, 90, "右チャンネル（客）を解析中"))
                 else:
                     mono_path = os.path.join(temp_dir, "mono.wav")
                     normalize_audio(sources[0]).export(mono_path, format="wav")
-                    mono_segments = transcribe_channel(mono_path, "AP")
+                    mono_segments = transcribe_channel(mono_path, "AP", 10, 90, "モノラル音声を解析中")
                     # モノラル通話は音声だけで人物を完全分離できないため、
                     # Whisperが検出した発言ターンを基準にAPから交互割当する。
                     for index, segment in enumerate(mono_segments):
                         segment["speaker"] = "AP" if index % 2 == 0 else "客"
                     all_segments.extend(mono_segments)
 
+        set_progress(94, "発言を時系列に並べています")
         # タイムスタンプ順に時系列ソート
         all_segments.sort(key=lambda x: x["start"])
 
@@ -432,9 +494,11 @@ async def transcribe_audio(files: list[UploadFile] = File(...)):
             time_tag = format_time(seg["start"])
             full_text += f"[{seg['speaker']} {time_tag}] {seg['text']}\n"
 
+        set_progress(100, "文字起こし完了")
         return {"text": full_text}
 
     except Exception as e:
+        set_progress(0, "エラーが発生しました")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/download-word")
